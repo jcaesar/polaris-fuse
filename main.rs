@@ -59,7 +59,7 @@ struct AuthResp {
     is_admin: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[allow(unused)]
 struct EntryRespCommon {
     path: Utf8PathBuf,
@@ -68,7 +68,7 @@ struct EntryRespCommon {
     artwork: Option<String>,
     year: Option<i32>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[allow(unused)]
 enum EntryResp {
     Directory {
@@ -100,7 +100,7 @@ impl EntryResp {
     }
 }
 
-type ListResp = Arc<IndexMap<Utf8PathBuf, EntryResp>>;
+type ListResp = Arc<IndexMap<String, EntryResp>>;
 
 type Inode = u64;
 type FileHandle = u64;
@@ -225,11 +225,25 @@ impl Client {
                 return None;
             }
         };
-        let store: ListResp = Arc::new(
-            res.into_iter()
-                .map(|e| (e.common().path.clone(), e))
-                .collect(),
-        );
+        let mut store = IndexMap::with_capacity(res.len());
+        for e in res {
+            let path = &e
+                .common()
+                .path
+                .file_name()
+                .expect("All list entries have names");
+            for suff in 1.. {
+                let name = match suff {
+                    1 => path.to_string(),
+                    n => format!("{path} (#{n})"),
+                };
+                if let indexmap::map::Entry::Vacant(vac) = store.entry(name) {
+                    vac.insert(e);
+                    break;
+                }
+            }
+        }
+        let store: ListResp = Arc::new(store);
         self.list_results.cache_set(path.into(), store.clone());
         Some(store)
     }
@@ -357,9 +371,8 @@ impl Filesystem for Fs {
             .next()
             .expect("Path can't be empty after join");
         if stem == Utf8Component::Normal("browse") {
-            let media_path = path.strip_prefix("browse").unwrap();
             match client.list(&parent_path) {
-                Some(list) => match list.get(Utf8Path::new(&media_path)) {
+                Some(list) => match list.get(name) {
                     Some(e) => reply.entry(
                         &TTL,
                         &newnode(
@@ -398,7 +411,7 @@ impl Filesystem for Fs {
             match path.components().count() {
                 1 => unreachable!(),
                 2 => reply.entry(&TTL, &newnode(path, FileType::Directory, 1), 0),
-                3 => reply.entry(&TTL, &newnode(path, FileType::Symlink, 1), 0), /* TODO: run search and check? */
+                3 => reply.entry(&TTL, &newnode(path, FileType::Symlink, 1), 0),
                 _ => reply.error(ENOENT),
             }
         } else {
@@ -465,7 +478,7 @@ impl Filesystem for Fs {
             if let Some(missing) = (offset + size).checked_sub(buffer.len()) {
                 let res = reader.take(missing as u64).read_to_end(buffer);
                 match res {
-                    Ok(res) => debug!(
+                    Ok(res) => trace!(
                         "Fh {fh} requested {missing} read {res} now {}",
                         buffer.len()
                     ),
@@ -493,7 +506,11 @@ impl Filesystem for Fs {
             warn!("Inode 0x{ino:x} not found, cannot read link (internal error?)");
             return reply.error(ENOENT);
         };
-        match node.path_stem() {
+        if node.path.components().count() < 2 {
+            warn!("no symlinks in root dir");
+            return reply.error(ENOENT);
+        }
+        let target = match node.path_stem() {
             "browse" => {
                 let mut target = Utf8PathBuf::new();
                 let media_path = node.path.strip_prefix("browse").unwrap();
@@ -502,14 +519,39 @@ impl Filesystem for Fs {
                 }
                 target.push("audio");
                 target.push(base64.encode(media_path.as_str().as_bytes()));
-                reply.data(target.as_str().as_bytes());
-                debug!("READLINK {} -> {target}", node.path);
+                target
+            }
+            "search" => {
+                let search = node
+                    .path
+                    .parent()
+                    .expect("In subpath of serach/, should have a parent");
+                let entry = node
+                    .path
+                    .file_name()
+                    .expect("Readlink paths must have names");
+                let Some(list) = self.client.list(search) else {
+                    return reply.error(ENOENT);
+                };
+                let Some(entry) = list.get(entry) else {
+                    return reply.error(ENOENT);
+                };
+                let unsearch = Utf8Path::new("../..");
+                match entry {
+                    EntryResp::Song { .. } => unsearch
+                        .join("audio")
+                        .join(base64.encode(entry.common().path.as_str().as_bytes())),
+                    EntryResp::Directory { .. } => {
+                        unsearch.join("browse").join(&entry.common().path)
+                    }
+                }
             }
             _ => {
-                error!("TODO");
-                return reply.error(EIO);
+                return reply.error(ENOENT);
             }
-        }
+        };
+        reply.data(target.as_str().as_bytes());
+        debug!("READLINK {} -> {target}", node.path);
     }
 
     fn opendir(&mut self, _req: &FuserRequest<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
@@ -607,13 +649,8 @@ impl Filesystem for Fs {
             entries.push((2, FileType::Directory, "search"));
             // Guess I'll keep "audio" hidden
         } else if let Some(open_dir) = self.tables.open_dirs.get(&fh) {
-            for x in open_dir.values() {
-                let common = x.common();
-                let name = common
-                    .path
-                    .file_name()
-                    .expect("All polaris entries should have a name");
-                let stem = node.path_stem();
+            let stem = node.path_stem();
+            for (name, x) in open_dir.iter() {
                 let typ = match stem {
                     "browse" => match x {
                         EntryResp::Directory { .. } => FileType::Directory,
@@ -622,7 +659,7 @@ impl Filesystem for Fs {
                     "search" => FileType::Symlink,
                     _ => unreachable!("Somehow got an open dir other than browse/search: {stem}"),
                 };
-                entries.push((0, typ, name.into()));
+                entries.push((0, typ, name.as_str()));
             }
         } else {
             warn!("Trying to read unknown dir node {ino} handle {fh}");
@@ -630,7 +667,6 @@ impl Filesystem for Fs {
         };
 
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-            // i + 1 means the index of the next entry
             if reply.add(entry.0, (i + 1) as i64, entry.1, entry.2) {
                 break;
             }
@@ -681,6 +717,7 @@ fn main() {
 
     let opts = &[
         MountOption::RO,
+        MountOption::DefaultPermissions,
         MountOption::FSName(concat!("fsname=", env!("CARGO_CRATE_NAME")).into()),
     ];
     fuser::mount2(client, mount, opts).unwrap();
