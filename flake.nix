@@ -31,15 +31,25 @@
           overlays = [(import rust-overlay)];
         };
         craneLib = crane.lib.${system};
+        PKG_CONFIG_PATH = "${pkgs.fuse3}/lib/pkgconfig";
         main = craneLib.buildPackage {
           pname = "mount-polaris";
           src = craneLib.cleanCargoSource ./.;
+          nativeBuildInputs = [pkgs.pkg-config];
+          inherit PKG_CONFIG_PATH;
         };
       in {
         packages.default = main;
         devShells.default = pkgs.mkShell {
           inputsFrom = [main];
-          inputs = [pkgs.rust-analyzer];
+          packages = with pkgs; [rust-analyzer rustfmt cargo-watch];
+          inherit PKG_CONFIG_PATH;
+        };
+        devShells.watch = pkgs.mkShell {
+          inputsFrom = [main];
+          packages = [pkgs.cargo-watch];
+          shellHook = "exec cargo watch";
+          inherit PKG_CONFIG_PATH;
         };
       }
     );
