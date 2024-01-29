@@ -337,9 +337,13 @@ impl Filesystem for Fs {
         } = self;
         let mut newnode = |path: Utf8PathBuf, kind, size| {
             let ino = match inodes.path2inode.get(&path) {
-                Some(&ino) => {
-                    /*TODO increase lookup count*/
-                    ino
+                Some(ino) => {
+                    inodes
+                        .inodes
+                        .get_mut(ino)
+                        .expect("Tables must match")
+                        .lookups += 1;
+                    *ino
                 }
                 None => {
                     let path = Arc::new(path.clone());
@@ -418,8 +422,28 @@ impl Filesystem for Fs {
             reply.error(ENOENT)
         }
     }
-    fn forget(&mut self, _req: &FuserRequest<'_>, ino: u64, _nlookup: u64) {
-        /* TODO */
+    fn forget(&mut self, _req: &FuserRequest<'_>, ino: u64, forget: u64) {
+        use std::collections::btree_map::Entry::*;
+        match self.tables.inodes.entry(ino) {
+            Occupied(mut e) => match e.get().lookups.checked_sub(forget) {
+                None | Some(0) => {
+                    debug!("FORGET inode 0x{ino:x} -> {}", e.get().path);
+                    self.tables
+                        .path2inode
+                        .remove(&e.get().path)
+                        .expect("Two tables must match");
+                    e.remove();
+                    // Inodes are forgotten on memory pressure (among other thigns). Time to clear out some stuff
+                    // TODO: do in background thread instead
+                    self.client.list_results.flush();
+                    self.client.open_results.flush();
+                }
+                Some(n) => e.get_mut().lookups = n,
+            },
+            Vacant(_) => {
+                error!("Trying to forget inode 0x{ino:x} which does not exit");
+            }
+        }
     }
 
     fn getattr(&mut self, _req: &FuserRequest, ino: u64, reply: ReplyAttr) {
