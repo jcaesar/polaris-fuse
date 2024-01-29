@@ -107,7 +107,7 @@ type FileHandle = u64;
 
 #[derive(Debug)]
 struct Node {
-    id: Inode,
+    ino: Inode,
     path: Arc<Utf8PathBuf>,
     kind: FileType,
     lookups: u64,
@@ -164,11 +164,11 @@ impl Fs {
             .into_json::<AuthResp>()
             .expect("Failed to authenticate");
         info!("Authenticated as {}", auth.username);
-        let node = |id, path: &str, size| {
+        let node = |ino, path: &str, size| {
             (
-                id,
+                ino,
                 Node {
-                    id,
+                    ino,
                     path: Arc::new(path.into()),
                     lookups: 1, /* shouldn't be forgotten */
                     kind: FileType::Directory,
@@ -331,14 +331,11 @@ impl Filesystem for Fs {
         };
         let path = parent.path.join(name);
         let parent_path = parent.path.clone();
-        let Fs {
-            client,
-            tables: inodes,
-        } = self;
+        let Fs { client, tables } = self;
         let mut newnode = |path: Utf8PathBuf, kind, size| {
-            let ino = match inodes.path2inode.get(&path) {
+            let ino = match tables.path2inode.get(&path) {
                 Some(ino) => {
-                    inodes
+                    tables
                         .inodes
                         .get_mut(ino)
                         .expect("Tables must match")
@@ -347,19 +344,19 @@ impl Filesystem for Fs {
                 }
                 None => {
                     let path = Arc::new(path.clone());
-                    let id = inodes.unused_id();
-                    inodes.path2inode.insert(path.clone(), id);
-                    inodes.inodes.insert(
-                        id,
+                    let ino = tables.unused_id();
+                    tables.path2inode.insert(path.clone(), ino);
+                    tables.inodes.insert(
+                        ino,
                         Node {
-                            id,
+                            ino,
                             path,
                             kind,
                             lookups: 1,
                             size,
                         },
                     );
-                    id
+                    ino
                 }
             };
             debug!("LOOKUP {path} -> {ino}, {kind:?}, {size} B");
@@ -451,7 +448,7 @@ impl Filesystem for Fs {
             warn!("Inode 0x{ino:x} not found, cannot get attribues (internal error?)");
             return reply.error(ENOENT);
         };
-        reply.attr(&TTL, &attr_for(node.id, node.kind, node.size));
+        reply.attr(&TTL, &attr_for(node.ino, node.kind, node.size));
     }
 
     fn open(&mut self, _req: &FuserRequest<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
