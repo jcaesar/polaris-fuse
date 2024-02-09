@@ -10,9 +10,8 @@ path = "main.rs"
 [dependencies]
 base64 = "0.21.7"
 cached = "0.48.1"
-camino = { version = "1.1.6", features = ["serde", "serde1"] }
-env_logger = "0.11.0"
-femtofemme = "0.1.0"
+camino = { version = "1.1.6", features = ["serde1"] }
+femtofemme = { version = "0.2.0", default-features = false, features = ["color"] }
 fuser = "0.14.0"
 indexmap = "2.1.0"
 libc = "0.2.152"

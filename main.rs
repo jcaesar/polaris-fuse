@@ -225,6 +225,7 @@ impl Client {
                 return None;
             }
         };
+        info!("GOT {path} ({} entries)", res.len());
         let mut store = IndexMap::with_capacity(res.len());
         for e in res {
             let path = &e
@@ -269,6 +270,7 @@ impl Client {
             error!("no length received for {url}, can't use");
             return None;
         };
+        info!("GET audio/{name} ({size} B)");
         let ret = Arc::new(Mutex::new(OpenFile {
             size,
             reader: req.into_reader(),
