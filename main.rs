@@ -11,7 +11,7 @@ use indexmap::IndexMap;
 use libc::{EBADFD, EIO, ENOENT};
 use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::Read;
@@ -285,7 +285,15 @@ impl Tables {
         fn max_id<V>(m: &BTreeMap<u64, V>) -> u64 {
             m.last_key_value().map(|(&k, _)| k).unwrap_or(0)
         }
-        max(max_id(&self.inodes), max_id(&self.open_dirs)) + 1
+        [
+            max_id(&self.inodes),
+            max_id(&self.open_dirs),
+            max_id(&self.open_files),
+        ]
+        .iter()
+        .max()
+        .unwrap()
+            + 1
     }
 }
 
