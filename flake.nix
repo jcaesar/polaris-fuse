@@ -1,6 +1,5 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -31,25 +30,21 @@
           overlays = [(import rust-overlay)];
         };
         craneLib = crane.lib.${system};
-        PKG_CONFIG_PATH = "${pkgs.fuse3}/lib/pkgconfig";
         main = craneLib.buildPackage {
           pname = "mount-polaris";
           src = craneLib.cleanCargoSource ./.;
-          nativeBuildInputs = [pkgs.pkg-config];
-          inherit PKG_CONFIG_PATH;
+          nativeBuildInputs = [pkgs.pkg-config pkgs.fuse3];
         };
       in {
         packages.default = main;
         devShells.default = pkgs.mkShell {
           inputsFrom = [main];
           packages = with pkgs; [rust-analyzer rustfmt cargo-watch];
-          inherit PKG_CONFIG_PATH;
         };
         devShells.watch = pkgs.mkShell {
           inputsFrom = [main];
           packages = [pkgs.cargo-watch];
           shellHook = "exec cargo watch";
-          inherit PKG_CONFIG_PATH;
         };
       }
     );
